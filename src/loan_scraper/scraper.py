@@ -1,3 +1,4 @@
+import re
 import time
 
 import undetected_chromedriver as uc
@@ -12,6 +13,13 @@ def open_chrome_driver():
     # Add more options to simulate human behavior
     options.add_argument("--disable-blink-features=AutomationControlled")
     return uc.Chrome(options=options)
+
+
+def _parse_int_currency(value):
+    if value is None:
+        return None
+    digits = re.sub(r"[^\d]", "", value)
+    return int(digits) if digits else None
 
 
 def get_property_urls(base_url, market="", filters=""):
@@ -77,6 +85,7 @@ def get_property_details(property_urls):
     listing_data = []
 
     driver = open_chrome_driver()
+    session_id = driver.session_id
 
     try:
         for prop in property_urls:
@@ -88,7 +97,10 @@ def get_property_details(property_urls):
                 wait = WebDriverWait(driver, 10)
 
                 # Extract data you need (example: title, price, etc.)
-                price = driver.find_element(By.CLASS_NAME, "property-info-price").text
+                raw_price = driver.find_element(
+                    By.CLASS_NAME, "property-info-price"
+                ).text
+                price = _parse_int_currency(raw_price)
 
                 st_num = driver.find_element(
                     By.CLASS_NAME, "property-info-address-main"
@@ -163,11 +175,12 @@ def get_property_details(property_urls):
                             for c in row.find_elements(By.CSS_SELECTOR, "th,td")
                         ]
                         if len(cells) >= 4:
+                            amount = _parse_int_currency(cells[2])
                             mortgage_rows.append(
                                 {
                                     "date": cells[0],
                                     "status": cells[1],
-                                    "amount": cells[2],
+                                    "amount": amount,
                                     "loan_type": cells[3],
                                 }
                             )
@@ -184,6 +197,7 @@ def get_property_details(property_urls):
                         bd_bth_sqft_data.get("Baths", ""),
                         bd_bth_sqft_data.get("Sq Ft", ""),
                         prop_desc,
+                        session_id,
                         mortgage_rows,
                     ]
                 )

@@ -29,6 +29,7 @@ def write_listing_data(final_data, output_dir, market):
                 "baths",
                 "sq_ft",
                 "description",
+                "session_id",
                 "mortgage_history",
             ]
         )
