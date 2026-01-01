@@ -1,4 +1,5 @@
 import os
+from datetime import datetime
 
 import psycopg2
 from psycopg2.extras import Json, execute_values
@@ -79,6 +80,7 @@ def write_listing_data(final_data):
                     _null_if_empty(baths),
                     _null_if_empty(square_feet),
                     description,
+                    datetime.utcnow(),
                     Json(mortgage_history),
                     listing_id,
                 )
@@ -99,6 +101,7 @@ def write_listing_data(final_data):
                         baths,
                         square_feet,
                         listing_description,
+                        scraped_at,
                         mortgage_history,
                         listing_id
                     )
