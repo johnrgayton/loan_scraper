@@ -12,7 +12,6 @@ def build_parser():
     parser.add_argument("--base-url", default=ScrapeConfig.base_url)
     parser.add_argument("--market", default=ScrapeConfig.market)
     parser.add_argument("--filters", default=ScrapeConfig.filters)
-    parser.add_argument("--output-dir", default=ScrapeConfig.output_dir)
     return parser
 
 
@@ -24,7 +23,7 @@ def main():
         base_url=args.base_url, market=args.market, filters=args.filters
     )
     listing_data = get_property_details(property_urls)
-    write_listing_data(listing_data, args.output_dir, args.market)
+    write_listing_data(listing_data)
 
 
 if __name__ == "__main__":

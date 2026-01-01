@@ -15,7 +15,7 @@ def open_chrome_driver():
     return uc.Chrome(options=options)
 
 
-def _parse_int_currency(value):
+def _parse_int_text(value):
     if value is None:
         return None
     digits = re.sub(r"[^\d]", "", value)
@@ -100,7 +100,7 @@ def get_property_details(property_urls):
                 raw_price = driver.find_element(
                     By.CLASS_NAME, "property-info-price"
                 ).text
-                price = _parse_int_currency(raw_price)
+                price = _parse_int_text(raw_price)
 
                 st_num = driver.find_element(
                     By.CLASS_NAME, "property-info-address-main"
@@ -175,7 +175,7 @@ def get_property_details(property_urls):
                             for c in row.find_elements(By.CSS_SELECTOR, "th,td")
                         ]
                         if len(cells) >= 4:
-                            amount = _parse_int_currency(cells[2])
+                            amount = _parse_int_text(cells[2])
                             mortgage_rows.append(
                                 {
                                     "date": cells[0],
@@ -195,7 +195,7 @@ def get_property_details(property_urls):
                         features_list,
                         bd_bth_sqft_data.get("Beds", ""),
                         bd_bth_sqft_data.get("Baths", ""),
-                        bd_bth_sqft_data.get("Sq Ft", ""),
+                        _parse_int_text(bd_bth_sqft_data.get("Sq Ft", "")),
                         prop_desc,
                         session_id,
                         mortgage_rows,
