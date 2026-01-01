@@ -53,11 +53,15 @@ def write_listing_data(final_data):
     try:
         rows = []
         for dat in final_data:
-            if len(dat) < 11:
+            if len(dat) < 15:
                 continue
             (
                 property_url,
+                market,
                 address,
+                city,
+                state,
+                zip_code,
                 price,
                 features,
                 beds,
@@ -71,18 +75,22 @@ def write_listing_data(final_data):
             features_json = _normalize_features(features)
             rows.append(
                 (
+                    datetime.utcnow(),
                     session_id,
+                    listing_id,
                     property_url,
+                    market,
                     address,
+                    city,
+                    state,
+                    zip_code,
                     price,
                     Json(features_json),
                     _null_if_empty(beds),
                     _null_if_empty(baths),
                     _null_if_empty(square_feet),
                     description,
-                    datetime.utcnow(),
                     Json(mortgage_history),
-                    listing_id,
                 )
             )
 
@@ -92,18 +100,22 @@ def write_listing_data(final_data):
                     cur,
                     """
                     INSERT INTO home_loans.f_scraped_data (
+                        scraped_at,
                         session_id,
+                        listing_id,
                         property_url,
+                        market,
                         address,
+                        city,
+                        state,
+                        zip,
                         current_list_price,
                         features,
                         beds,
                         baths,
                         square_feet,
                         listing_description,
-                        scraped_at,
-                        mortgage_history,
-                        listing_id
+                        mortgage_history
                     )
                     VALUES %s
                     """,

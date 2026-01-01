@@ -37,6 +37,16 @@ def _parse_int_text(value):
     return int(digits) if digits else None
 
 
+def _parse_city_state_zip(value):
+    if not value:
+        return "", "", ""
+    match = re.search(r"^(.*?),\s*([A-Z]{2})\s+(\d{5})", value.strip())
+    if not match:
+        return value.strip(), "", ""
+    city, state, zip_code = match.groups()
+    return city.strip(), state.strip(), zip_code.strip()
+
+
 def _extract_listing_id(url):
     if not url:
         return ""
@@ -106,7 +116,7 @@ def get_property_urls(base_url, market="", filters=""):
     return property_urls
 
 
-def get_property_details(property_urls):
+def get_property_details(property_urls, market=""):
     listing_data = []
 
     driver = open_chrome_driver()
@@ -139,7 +149,8 @@ def get_property_details(property_urls):
                     By.CLASS_NAME, "property-info-address-citystatezip"
                 ).text
                 _sleep_jitter()
-                address = f"{st_num} {city_state_zip}"
+                city, state, zip_code = _parse_city_state_zip(city_state_zip)
+                address = st_num.strip()
 
                 features = driver.find_elements(By.CLASS_NAME, "highlight-value")
                 features_list = [feat.text for feat in features]
@@ -223,7 +234,11 @@ def get_property_details(property_urls):
                 listing_data.append(
                     [
                         prop,
+                        market,
                         address,
+                        city,
+                        state,
+                        zip_code,
                         price,
                         features_list,
                         bd_bth_sqft_data.get("Beds", ""),

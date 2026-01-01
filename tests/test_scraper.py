@@ -24,10 +24,11 @@ def test_extract_listing_id():
 )
 def test_live_scrape_single_url():
     url = "https://www.homes.com/property/100-abaco-dr-e-cedar-point-nc/w3p44ve2xfvs9/"
-    listing_data = get_property_details([url])
+    listing_data = get_property_details([url], market="cedar-point-nc")
     assert len(listing_data) == 1
     row = listing_data[0]
     assert row[0] == url
+    assert row[1] == "cedar-point-nc"
     assert row[-1] == "w3p44ve2xfvs9"
 
     required_env = ("PGHOST", "PGDATABASE", "PGUSER")

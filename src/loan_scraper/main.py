@@ -22,7 +22,7 @@ def main():
     property_urls = get_property_urls(
         base_url=args.base_url, market=args.market, filters=args.filters
     )
-    listing_data = get_property_details(property_urls)
+    listing_data = get_property_details(property_urls, market=args.market)
     write_listing_data(listing_data)
 
 
