@@ -85,6 +85,7 @@ def get_property_details(property_urls):
                 driver.get(prop)
 
                 time.sleep(10)
+                wait = WebDriverWait(driver, 10)
 
                 # Extract data you need (example: title, price, etc.)
                 price = driver.find_element(By.CLASS_NAME, "property-info-price").text
@@ -125,59 +126,53 @@ def get_property_details(property_urls):
                     By.CLASS_NAME, "ldp-description-text"
                 ).text
 
-                next_button = WebDriverWait(driver, 10).until(
-                    EC.element_to_be_clickable((By.ID, "mortgage-0"))
-                )
-
-                driver.execute_script(
-                    "arguments[0].scrollIntoView({block: 'end'});", next_button
-                )
-                time.sleep(5)
-                driver.execute_script(
-                    "arguments[0].scrollIntoView({block: 'end'});", next_button
-                )
-                driver.execute_script("window.scrollBy(0, 300);")
-
-                next_button.click()
-
-                time.sleep(5)
-
+                mortgage_rows = []
                 try:
-                    rows = driver.find_elements(
-                        By.CLASS_NAME, "property-history-drawer-row"
+                    heading = wait.until(
+                        EC.presence_of_element_located(
+                            (
+                                By.XPATH,
+                                "//h2[normalize-space()='Mortgage History' or "
+                                "normalize-space()='Mortgage history']",
+                            )
+                        )
+                    )
+                    driver.execute_script(
+                        "arguments[0].scrollIntoView({block:'center'});", heading
+                    )
+                    time.sleep(2)
+                    driver.execute_script(
+                        "arguments[0].scrollIntoView({block:'center'});", heading
+                    )
+                    driver.execute_script("window.scrollBy(0, 200);")
+
+                    table = wait.until(
+                        EC.presence_of_element_located(
+                            (
+                                By.XPATH,
+                                "(//h2[normalize-space()='Mortgage History' or "
+                                "normalize-space()='Mortgage history']/following::table)[1]",
+                            )
+                        )
                     )
 
-                    mortgage_data = {}
-
-                    # Extract key-value pairs
+                    rows = table.find_elements(By.CSS_SELECTOR, "tbody tr")
                     for row in rows:
-                        cols = row.find_elements(
-                            By.CLASS_NAME, "property-history-drawer-col"
-                        )
-                        key = None  # Initialize key variable
-
-                        for col in cols:
-                            try:
-                                title_elem = col.find_element(
-                                    By.CLASS_NAME,
-                                    "property-history-drawer-col-title",
-                                )
-                                value_elem = col.find_element(
-                                    By.CLASS_NAME,
-                                    "property-history-drawer-col-text",
-                                )
-
-                                key = title_elem.text.strip()
-                                value = value_elem.text.strip()
-
-                                if key and value:
-                                    mortgage_data[key] = value
-
-                            except Exception:
-                                continue  # Skip elements that do not match
+                        cells = [
+                            c.text.strip()
+                            for c in row.find_elements(By.CSS_SELECTOR, "th,td")
+                        ]
+                        if len(cells) >= 4:
+                            mortgage_rows.append(
+                                {
+                                    "date": cells[0],
+                                    "status": cells[1],
+                                    "amount": cells[2],
+                                    "loan_type": cells[3],
+                                }
+                            )
                 except Exception:
                     print("Mortgage data not found")
-                    continue
 
                 listing_data.append(
                     [
@@ -189,13 +184,7 @@ def get_property_details(property_urls):
                         bd_bth_sqft_data.get("Baths", ""),
                         bd_bth_sqft_data.get("Sq Ft", ""),
                         prop_desc,
-                        mortgage_data.get("Loan Type", ""),
-                        mortgage_data.get("Loan Term", ""),
-                        mortgage_data.get("Date", ""),
-                        mortgage_data.get("Status", ""),
-                        mortgage_data.get("Total Amount", ""),
-                        mortgage_data.get("Outstanding Balance", ""),
-                        mortgage_data.get("Interest Rate", ""),
+                        mortgage_rows,
                     ]
                 )
 

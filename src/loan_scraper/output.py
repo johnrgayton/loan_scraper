@@ -1,6 +1,7 @@
 import csv
 import os
 import re
+import json
 from datetime import date
 
 
@@ -28,15 +29,11 @@ def write_listing_data(final_data, output_dir, market):
                 "baths",
                 "sq_ft",
                 "description",
-                "current_mortgage_type",
-                "current_mortgage_term",
-                "current_mortgage_start_dt",
-                "current_mortgage_status",
-                "current_mortgage_amount",
-                "current_mortgage_balance",
-                "current_mortgage_rate",
+                "mortgage_history",
             ]
         )
 
         for dat in final_data:
-            writer.writerow(dat)
+            mortgage_history = dat[-1] if len(dat) > 0 else []
+            row = dat[:-1] + [json.dumps(mortgage_history)]
+            writer.writerow(row)
