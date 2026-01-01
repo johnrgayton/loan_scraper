@@ -100,7 +100,29 @@ localhost:5432:postgres:postgres:YOUR_PASSWORD_HERE
 Then run:
 
 ```
-PYTHONPATH=src python3 -m loan_scraper
+PGHOST=localhost PGPORT=5432 PGDATABASE=postgres PGUSER=postgres \
+PYTHONPATH=src python3 -m loan_scraper --market venice-fl
+```
+
+Full example with filters:
+
+```
+PGHOST=localhost PGPORT=5432 PGDATABASE=postgres PGUSER=postgres \
+PYTHONPATH=src python3 -m loan_scraper \
+  --market venice-fl \
+  --bed-min 4 \
+  --bed-max 5 \
+  --sfmin 1500 \
+  --bath-min 2 \
+  --bath-max 5 \
+  --parking 2 \
+  --price-max 600000 \
+  --exclude-active-adult true \
+  --require-garage true
+```
+
+To omit any filter, set it to `any` (for example, `--sfmin any` or
+`--bath-max any`). This removes it from the URL.
 ```
 
 ## Tests
