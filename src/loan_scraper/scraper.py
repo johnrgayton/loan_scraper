@@ -1,3 +1,5 @@
+import os
+import random
 import re
 import time
 
@@ -7,11 +9,24 @@ from selenium.webdriver.support import expected_conditions as EC
 from selenium.webdriver.support.ui import WebDriverWait
 
 
-def open_chrome_driver():
+SLEEP_MIN_SECONDS = float(os.getenv("SCRAPER_SLEEP_MIN", "1.5"))
+SLEEP_MAX_SECONDS = float(os.getenv("SCRAPER_SLEEP_MAX", "3.5"))
+
+
+def _sleep_jitter(min_seconds=SLEEP_MIN_SECONDS, max_seconds=SLEEP_MAX_SECONDS):
+    if min_seconds <= 0 and max_seconds <= 0:
+        return
+    time.sleep(random.uniform(min_seconds, max_seconds))
+
+
+def open_chrome_driver(proxy_url=None):
     options = uc.ChromeOptions()
     options.add_argument("--start-maximized")
     # Add more options to simulate human behavior
     options.add_argument("--disable-blink-features=AutomationControlled")
+    proxy = proxy_url or os.getenv("SCRAPER_PROXY_URL")
+    if proxy:
+        options.add_argument(f"--proxy-server={proxy}")
     return uc.Chrome(options=options)
 
 
@@ -28,7 +43,9 @@ def get_property_urls(base_url, market="", filters=""):
     driver = open_chrome_driver()
     driver.get(url)
 
-    time.sleep(10)
+    wait = WebDriverWait(driver, 15)
+    wait.until(EC.presence_of_element_located((By.CLASS_NAME, "placard-container")))
+    _sleep_jitter(4, 7)
 
     property_urls = []
     page_number = 1  # Track current page
@@ -58,8 +75,9 @@ def get_property_urls(base_url, market="", filters=""):
                 driver.execute_script(
                     "arguments[0].scrollIntoView();", next_button
                 )  # Scroll into view
+                _sleep_jitter()
                 next_button.click()
-                time.sleep(3)  # Allow time for page transition
+                _sleep_jitter(4, 6)
 
                 # Wait for a new listing that wasn't on the previous page
                 WebDriverWait(driver, 10).until(
@@ -93,8 +111,13 @@ def get_property_details(property_urls):
                 print(f"Navigating to: {prop}")
                 driver.get(prop)
 
-                time.sleep(10)
-                wait = WebDriverWait(driver, 10)
+                wait = WebDriverWait(driver, 15)
+                wait.until(
+                    EC.presence_of_element_located(
+                        (By.CLASS_NAME, "property-info-price")
+                    )
+                )
+                _sleep_jitter(5, 8)
 
                 # Extract data you need (example: title, price, etc.)
                 raw_price = driver.find_element(
@@ -108,6 +131,7 @@ def get_property_details(property_urls):
                 city_state_zip = driver.find_element(
                     By.CLASS_NAME, "property-info-address-citystatezip"
                 ).text
+                _sleep_jitter()
                 address = f"{st_num} {city_state_zip}"
 
                 features = driver.find_elements(By.CLASS_NAME, "highlight-value")
@@ -134,6 +158,7 @@ def get_property_details(property_urls):
                     except Exception:
                         continue  # Skip if elements are missing
 
+                _sleep_jitter()
                 prop_desc = driver.find_element(
                     By.CLASS_NAME, "ldp-description-text"
                 ).text
@@ -152,11 +177,12 @@ def get_property_details(property_urls):
                     driver.execute_script(
                         "arguments[0].scrollIntoView({block:'center'});", heading
                     )
-                    time.sleep(2)
+                    _sleep_jitter(2, 4)
                     driver.execute_script(
                         "arguments[0].scrollIntoView({block:'center'});", heading
                     )
                     driver.execute_script("window.scrollBy(0, 200);")
+                    _sleep_jitter(1.5, 3)
 
                     table = wait.until(
                         EC.presence_of_element_located(
@@ -201,6 +227,7 @@ def get_property_details(property_urls):
                         mortgage_rows,
                     ]
                 )
+                _sleep_jitter(3, 6)
 
             except Exception as exc:
                 print(f"Error processing {prop}: {exc}")
