@@ -52,8 +52,7 @@ def write_listing_data(final_data):
     try:
         rows = []
         for dat in final_data:
-            mortgage_history = dat[-1] if len(dat) > 0 else []
-            if len(dat) < 10:
+            if len(dat) < 11:
                 continue
             (
                 property_url,
@@ -65,7 +64,8 @@ def write_listing_data(final_data):
                 square_feet,
                 description,
                 session_id,
-                _,
+                mortgage_history,
+                listing_id,
             ) = dat
             features_json = _normalize_features(features)
             rows.append(
@@ -80,6 +80,7 @@ def write_listing_data(final_data):
                     _null_if_empty(square_feet),
                     description,
                     Json(mortgage_history),
+                    listing_id,
                 )
             )
 
@@ -98,7 +99,8 @@ def write_listing_data(final_data):
                         baths,
                         square_feet,
                         listing_description,
-                        mortgage_history
+                        mortgage_history,
+                        listing_id
                     )
                     VALUES %s
                     """,

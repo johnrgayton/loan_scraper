@@ -37,6 +37,13 @@ def _parse_int_text(value):
     return int(digits) if digits else None
 
 
+def _extract_listing_id(url):
+    if not url:
+        return ""
+    match = re.search(r"/([^/]+)/?$", url)
+    return match.group(1) if match else ""
+
+
 def get_property_urls(base_url, market="", filters=""):
     url = f"{base_url}/{market}/{filters}"
 
@@ -225,6 +232,7 @@ def get_property_details(property_urls):
                         prop_desc,
                         session_id,
                         mortgage_rows,
+                        _extract_listing_id(prop),
                     ]
                 )
                 _sleep_jitter(3, 6)
