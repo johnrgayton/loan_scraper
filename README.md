@@ -1,5 +1,7 @@
 # loan_scraper
 
+** This project is used for personal use only and is not, nor should the data herein, be used for commercial purposes. **
+
 This project scrapes Homes.com listing pages to capture property details and
 mortgage history data, then stores the results in Postgres for analysis. The
 primary goal is to support research into assumable loans by collecting a
