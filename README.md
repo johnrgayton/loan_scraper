@@ -1,4 +1,4 @@
-# loan_scraper
+# Assumable Loan Data Web Scraper
 
 ** This project is used for personal use only and is not, nor should the data herein, be used for commercial purposes. **
 
