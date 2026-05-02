@@ -2,12 +2,19 @@ import os
 
 import pytest
 
-from loan_scraper.main import build_filters, build_parser
+from loan_scraper.main import (
+    _cleanup_property_urls,
+    _write_property_urls,
+    build_filters,
+    build_parser,
+)
 from loan_scraper.scraper import (
     _detect_blocked_page,
     _extract_listing_id,
     _chrome_profile_directory,
+    _chrome_debugger_address,
     _chrome_user_data_dir,
+    _close_driver,
     _major_version_from_text,
     _parse_int_text,
     get_property_details,
@@ -49,6 +56,22 @@ def test_detect_blocked_page():
     assert "permission" in body_sample
 
 
+def test_detect_blocked_page_ignores_source_only_captcha():
+    class FakeDriver:
+        title = "Homes for Sale"
+        page_source = "<html><script>captchaToken = '';</script><body>Valid listings</body></html>"
+
+        def find_element(self, *_args):
+            class Body:
+                text = "Valid listings"
+
+            return Body()
+
+    marker, body_sample = _detect_blocked_page(FakeDriver())
+    assert marker is None
+    assert body_sample == ""
+
+
 def test_build_filters_defaults_to_unfiltered_market():
     args = build_parser().parse_args(["--market", "chesterfield-mo"])
     assert build_filters(args) == ""
@@ -88,6 +111,52 @@ def test_chrome_profile_env(monkeypatch, tmp_path):
 
     assert _chrome_user_data_dir() == str(profile_path)
     assert _chrome_profile_directory() == "Default"
+
+
+def test_chrome_debugger_address_env(monkeypatch):
+    monkeypatch.setenv("CHROME_DEBUGGER_ADDRESS", "127.0.0.1:9222")
+    assert _chrome_debugger_address() == "127.0.0.1:9222"
+
+
+def test_write_property_urls(tmp_path):
+    output_path = tmp_path / "urls.txt"
+    _write_property_urls(["https://example.com/a", "https://example.com/b"], output_path)
+    assert output_path.read_text(encoding="utf-8") == (
+        "https://example.com/a\nhttps://example.com/b\n"
+    )
+
+
+def test_cleanup_property_urls(tmp_path):
+    output_path = tmp_path / "urls.txt"
+    output_path.write_text("https://example.com/a\n", encoding="utf-8")
+    _cleanup_property_urls(output_path)
+    assert not output_path.exists()
+
+
+def test_close_driver_skips_quit_in_debugger_attach_mode(monkeypatch):
+    class FakeDriver:
+        quit_called = False
+
+        def quit(self):
+            self.quit_called = True
+
+    driver = FakeDriver()
+    monkeypatch.setenv("CHROME_DEBUGGER_ADDRESS", "127.0.0.1:9222")
+    _close_driver(driver)
+    assert not driver.quit_called
+
+
+def test_close_driver_quits_owned_browser(monkeypatch):
+    class FakeDriver:
+        quit_called = False
+
+        def quit(self):
+            self.quit_called = True
+
+    driver = FakeDriver()
+    monkeypatch.delenv("CHROME_DEBUGGER_ADDRESS", raising=False)
+    _close_driver(driver)
+    assert driver.quit_called
 
 
 @pytest.mark.skipif(

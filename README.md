@@ -128,6 +128,76 @@ docker compose run --rm scraper --market chesterfield-mo --price-max 700000
 If you need a named Chrome profile within the user-data directory, set
 `CHROME_PROFILE_DIRECTORY`, for example `Default` or `Profile 1`.
 
+## Attaching to Manual Chrome
+
+For difficult blocks, you can manually start Chrome and let the scraper attach
+to that existing browser session. This keeps the profile dedicated to the
+scraper, but lets you navigate manually before automation starts.
+
+Start Chrome with remote debugging enabled:
+
+```
+"/Applications/Google Chrome.app/Contents/MacOS/Google Chrome" \
+  --remote-debugging-port=9222 \
+  --user-data-dir="$PWD/chrome-profile/manual-debug" \
+  --profile-directory=Default
+```
+
+In that Chrome window, manually visit Homes.com and navigate until the site is
+usable. Leave the browser open, then run the scraper in another terminal:
+
+```
+CHROME_DEBUGGER_ADDRESS=127.0.0.1:9222 \
+CHROME_VERSION_MAIN=147 \
+PYTHONPATH=src python3 -m loan_scraper \
+  --market chesterfield-mo \
+  --price-max 700000
+```
+
+To extract URLs from the page you already opened manually, without initial
+navigation:
+
+```
+CHROME_DEBUGGER_ADDRESS=127.0.0.1:9222 \
+CHROME_VERSION_MAIN=147 \
+PYTHONPATH=src python3 -m loan_scraper \
+  --use-current-page \
+  --follow-pagination \
+  --urls-only \
+  --url-output debug/property_urls.txt
+```
+
+`--follow-pagination` follows page links such as `/p2/` slowly and deduplicates
+property URLs across pages. Omit it if you only want to read the currently open
+page.
+
+To scrape details after collecting URLs, omit `--urls-only`. In
+`--use-current-page` mode, each property URL opens in a temporary tab, gets
+scraped, closes, and returns to the original search-results tab:
+
+```
+CHROME_DEBUGGER_ADDRESS=127.0.0.1:9222 \
+CHROME_VERSION_MAIN=147 \
+PYTHONPATH=src python3 -m loan_scraper \
+  --use-current-page \
+  --follow-pagination \
+  --url-output debug/property_urls.txt \
+  --market chesterfield-mo
+```
+
+For full scrapes, `--url-output` is removed after a successful database write.
+Add `--keep-url-output` if you want to keep the URL file for review or resume.
+
+The manual-assisted full scrape attaches once and reuses that same browser
+session for URL collection, pagination, and detail pages. It leaves the
+manually opened Chrome session running when finished.
+
+When `CHROME_DEBUGGER_ADDRESS` is set, the scraper attaches to the running
+browser instead of launching Chrome itself. Launch-only settings like
+`CHROME_USER_DATA_DIR`, `CHROME_PROFILE_DIRECTORY`, `SCRAPER_HEADLESS`, and
+`SCRAPER_PROXY_URL` are ignored in this mode because the browser already
+exists.
+
 ## Postgres output
 
 The scraper inserts directly into Postgres using psycopg2 and JSONB fields for

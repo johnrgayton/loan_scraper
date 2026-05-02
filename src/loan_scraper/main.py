@@ -1,9 +1,15 @@
 import argparse
+import os
 from urllib.parse import urlencode
 
 from loan_scraper.config import ScrapeConfig
 from loan_scraper.output import write_listing_data
-from loan_scraper.scraper import get_property_details, get_property_urls
+from loan_scraper.scraper import (
+    get_property_details,
+    get_property_urls,
+    get_property_urls_from_current_page,
+    scrape_details_from_current_page_in_one_session,
+)
 
 
 def _param_or_none(value):
@@ -85,19 +91,82 @@ def build_parser():
         "--exclude-active-adult", default=ScrapeConfig.exclude_active_adult
     )
     parser.add_argument("--require-garage", default=ScrapeConfig.require_garage)
+    parser.add_argument(
+        "--use-current-page",
+        action="store_true",
+        help="Attach to the current browser page and read listings without initial navigation.",
+    )
+    parser.add_argument(
+        "--follow-pagination",
+        action="store_true",
+        help="Follow pagination links after reading the current page.",
+    )
+    parser.add_argument(
+        "--urls-only",
+        action="store_true",
+        help="Collect property URLs and stop before scraping listing details.",
+    )
+    parser.add_argument(
+        "--url-output",
+        help="Optional file path for writing collected property URLs, one per line.",
+    )
+    parser.add_argument(
+        "--keep-url-output",
+        action="store_true",
+        help="Keep --url-output after a full scrape. URL-only mode always keeps it.",
+    )
     return parser
+
+
+def _write_property_urls(property_urls, output_path):
+    if not output_path:
+        return
+    with open(output_path, "w", encoding="utf-8") as output_file:
+        output_file.write("\n".join(property_urls))
+        if property_urls:
+            output_file.write("\n")
+
+
+def _cleanup_property_urls(output_path):
+    if output_path and os.path.exists(output_path):
+        os.remove(output_path)
 
 
 def main():
     parser = build_parser()
     args = parser.parse_args()
 
-    filters = build_filters(args)
-    property_urls = get_property_urls(
-        base_url=args.base_url, market=args.market, filters=filters
-    )
+    if args.use_current_page and not args.urls_only:
+        property_urls, listing_data = scrape_details_from_current_page_in_one_session(
+            follow_pagination=args.follow_pagination,
+            market=args.market,
+        )
+        print(f"Collected {len(property_urls)} unique property URLs.")
+        _write_property_urls(property_urls, args.url_output)
+        write_listing_data(listing_data)
+        if args.url_output and not args.keep_url_output:
+            _cleanup_property_urls(args.url_output)
+        return
+
+    if args.use_current_page:
+        property_urls = get_property_urls_from_current_page(
+            follow_pagination=args.follow_pagination
+        )
+    else:
+        filters = build_filters(args)
+        property_urls = get_property_urls(
+            base_url=args.base_url, market=args.market, filters=filters
+        )
+
+    print(f"Collected {len(property_urls)} unique property URLs.")
+    _write_property_urls(property_urls, args.url_output)
+    if args.urls_only:
+        return
+
     listing_data = get_property_details(property_urls, market=args.market)
     write_listing_data(listing_data)
+    if args.url_output and not args.keep_url_output:
+        _cleanup_property_urls(args.url_output)
 
 
 if __name__ == "__main__":

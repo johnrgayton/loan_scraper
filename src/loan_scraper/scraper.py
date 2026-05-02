@@ -29,9 +29,9 @@ BLOCKED_PAGE_MARKERS = (
     "you don't have permission to access",
     "unusual traffic",
     "verify you are human",
-    "captcha",
     "just a moment",
 )
+VISIBLE_BLOCKED_PAGE_MARKERS = BLOCKED_PAGE_MARKERS + ("captcha",)
 
 
 class ScraperBlockedError(RuntimeError):
@@ -133,6 +133,14 @@ def _chrome_profile_directory():
     return os.getenv("CHROME_PROFILE_DIRECTORY", "").strip()
 
 
+def _chrome_debugger_address():
+    return os.getenv("CHROME_DEBUGGER_ADDRESS", "").strip()
+
+
+def _is_debugger_attach_mode():
+    return bool(_chrome_debugger_address())
+
+
 def _is_debug_enabled():
     return os.getenv("SCRAPER_DEBUG", "").strip().lower() in ("1", "true", "yes", "y")
 
@@ -216,8 +224,11 @@ def _detect_blocked_page(driver):
     body_text = _get_body_text(driver)
     body_lower = body_text.lower()
     source_lower = (driver.page_source or "").lower()
+    for marker in VISIBLE_BLOCKED_PAGE_MARKERS:
+        if marker in title or marker in body_lower:
+            return marker, body_text[:500]
     for marker in BLOCKED_PAGE_MARKERS:
-        if marker in title or marker in body_lower or marker in source_lower:
+        if marker in source_lower:
             return marker, body_text[:500]
     return None, ""
 
@@ -280,31 +291,124 @@ def _load_search_page(driver, base_url, market, filters):
     return final_url
 
 
+def _extract_property_urls_from_page(driver):
+    property_urls = []
+    for listing in driver.find_elements(By.CLASS_NAME, "placard-container"):
+        try:
+            link = listing.find_element(By.TAG_NAME, "a")
+            href = link.get_attribute("href")
+        except Exception:
+            continue
+        if href and href not in property_urls:
+            property_urls.append(href)
+    return property_urls
+
+
+def _pagination_urls_from_page(driver):
+    page_urls = []
+    for link in driver.find_elements(By.CSS_SELECTOR, "nav a[aria-label^='Go to page']"):
+        href = link.get_attribute("href")
+        if href and href not in page_urls:
+            page_urls.append(href)
+    return page_urls
+
+
+def _open_temporary_tab(driver, url):
+    existing_handles = set(driver.window_handles)
+    driver.execute_script("window.open('about:blank', '_blank');")
+    WebDriverWait(driver, 10).until(
+        lambda d: len(set(d.window_handles) - existing_handles) == 1
+    )
+    new_handle = (set(driver.window_handles) - existing_handles).pop()
+    driver.switch_to.window(new_handle)
+    driver.get(url)
+    return new_handle
+
+
+def _close_driver(driver):
+    if _is_debugger_attach_mode():
+        return
+    driver.quit()
+
+
+def _close_current_tab_and_return(driver, anchor_handle):
+    if driver.current_window_handle != anchor_handle:
+        driver.close()
+    driver.switch_to.window(anchor_handle)
+
+
+def _collect_property_urls_from_attached_page(driver, follow_pagination=False):
+    anchor_handle = driver.current_window_handle
+    current_url = driver.current_url
+    print(f"Reading current page: {current_url}")
+    _raise_if_blocked(driver, current_url)
+    _wait_for_listing_cards(driver, current_url)
+
+    property_urls = _extract_property_urls_from_page(driver)
+    print(f"Found {len(property_urls)} property URLs on current page.")
+
+    if follow_pagination:
+        pagination_urls = _pagination_urls_from_page(driver)
+        print(f"Found {len(pagination_urls)} pagination URLs.")
+        for page_url in pagination_urls:
+            if page_url == current_url:
+                continue
+            print(f"Navigating pagination URL in temporary tab: {page_url}")
+            _sleep_jitter(6, 10)
+            try:
+                _open_temporary_tab(driver, page_url)
+                _raise_if_blocked(driver, page_url)
+                _wait_for_listing_cards(driver, page_url)
+                _sleep_jitter(4, 7)
+                for property_url in _extract_property_urls_from_page(driver):
+                    if property_url not in property_urls:
+                        property_urls.append(property_url)
+            finally:
+                _close_current_tab_and_return(driver, anchor_handle)
+            print(f"Collected {len(property_urls)} total unique property URLs.")
+
+    return property_urls
+
+
+def get_property_urls_from_current_page(follow_pagination=False):
+    driver = open_chrome_driver()
+    try:
+        return _collect_property_urls_from_attached_page(driver, follow_pagination)
+    finally:
+        _close_driver(driver)
+
+
 def open_chrome_driver(proxy_url=None):
     _validate_browser_driver_versions()
 
     options = uc.ChromeOptions()
+    debugger_address = _chrome_debugger_address()
+    if debugger_address:
+        # Attach to a manually started Chrome session instead of launching one.
+        options.debugger_address = debugger_address
+
     chrome_binary = os.getenv("CHROME_BINARY_PATH")
-    if chrome_binary:
+    if chrome_binary and not debugger_address:
         options.binary_location = chrome_binary
     user_data_dir = _chrome_user_data_dir()
-    if user_data_dir:
+    if user_data_dir and not debugger_address:
         Path(user_data_dir).mkdir(parents=True, exist_ok=True)
         options.add_argument(f"--user-data-dir={user_data_dir}")
     profile_directory = _chrome_profile_directory()
-    if profile_directory:
+    if profile_directory and not debugger_address:
         options.add_argument(f"--profile-directory={profile_directory}")
-    if _is_headless_enabled():
+    if _is_headless_enabled() and not debugger_address:
         options.add_argument("--headless=new")
         options.add_argument("--window-size=1920,1080")
-    else:
+    elif not debugger_address:
         options.add_argument("--start-maximized")
     # Add more options to simulate human behavior
-    options.add_argument("--disable-blink-features=AutomationControlled")
-    options.add_argument("--no-sandbox")
-    options.add_argument("--disable-dev-shm-usage")
+    if not debugger_address:
+        options.add_argument("--disable-blink-features=AutomationControlled")
+        options.add_argument("--no-sandbox")
+        options.add_argument("--disable-dev-shm-usage")
     proxy = proxy_url or os.getenv("SCRAPER_PROXY_URL")
-    if proxy:
+    if proxy and not debugger_address:
         options.add_argument(f"--proxy-server={proxy}")
     return uc.Chrome(options=options, version_main=_configured_chrome_version_main())
 
@@ -348,13 +452,9 @@ def get_property_urls(base_url, market="", filters=""):
             print(f"Scraping Page {page_number}...")
 
             # Extract property URLs from the current page
-            listings = driver.find_elements(By.CLASS_NAME, "placard-container")
-            for listing in listings:
-                try:
-                    link = listing.find_element(By.TAG_NAME, "a")
-                    property_urls.append(link.get_attribute("href"))
-                except Exception:
-                    continue  # Skip if no link found
+            for property_url in _extract_property_urls_from_page(driver):
+                if property_url not in property_urls:
+                    property_urls.append(property_url)
 
             # Store the last extracted listing URL for comparison
             last_url = property_urls[-1] if property_urls else None
@@ -392,6 +492,179 @@ def get_property_urls(base_url, market="", filters=""):
     return property_urls
 
 
+def _extract_property_detail_row(driver, prop, market, session_id):
+    wait = WebDriverWait(driver, 15)
+    wait.until(EC.presence_of_element_located((By.CLASS_NAME, "property-info-price")))
+    _sleep_jitter(5, 8)
+
+    raw_price = driver.find_element(By.CLASS_NAME, "property-info-price").text
+    price = _parse_int_text(raw_price)
+
+    st_num = driver.find_element(By.CLASS_NAME, "property-info-address-main").text
+    city_state_zip = driver.find_element(
+        By.CLASS_NAME, "property-info-address-citystatezip"
+    ).text
+    _sleep_jitter()
+    city, state, zip_code = _parse_city_state_zip(city_state_zip)
+    address = st_num.strip()
+
+    features = driver.find_elements(By.CLASS_NAME, "highlight-value")
+    features_list = [feat.text for feat in features]
+
+    bd_bth_sqft_feat = driver.find_elements(By.CLASS_NAME, "property-info-feature")
+    bd_bth_sqft_data = {}
+
+    for feature in bd_bth_sqft_feat:
+        try:
+            key_elem = feature.find_element(By.XPATH, "./span[2]")
+            value_elem = feature.find_element(By.CLASS_NAME, "property-info-feature-detail")
+
+            key = key_elem.text.strip()
+            value = value_elem.text.strip()
+
+            bd_bth_sqft_data[key] = value  # Store in dictionary
+
+        except Exception:
+            continue  # Skip if elements are missing
+
+    _sleep_jitter()
+    prop_desc = driver.find_element(By.CLASS_NAME, "ldp-description-text").text
+
+    mortgage_rows = []
+    try:
+        heading = wait.until(
+            EC.presence_of_element_located(
+                (
+                    By.XPATH,
+                    "//h2[normalize-space()='Mortgage History' or "
+                    "normalize-space()='Mortgage history']",
+                )
+            )
+        )
+        driver.execute_script("arguments[0].scrollIntoView({block:'center'});", heading)
+        _sleep_jitter(2, 4)
+        driver.execute_script("arguments[0].scrollIntoView({block:'center'});", heading)
+        driver.execute_script("window.scrollBy(0, 200);")
+        _sleep_jitter(1.5, 3)
+
+        table = wait.until(
+            EC.presence_of_element_located(
+                (
+                    By.XPATH,
+                    "(//h2[normalize-space()='Mortgage History' or "
+                    "normalize-space()='Mortgage history']/following::table)[1]",
+                )
+            )
+        )
+
+        rows = table.find_elements(By.CSS_SELECTOR, "tbody tr")
+        for row in rows:
+            cells = [c.text.strip() for c in row.find_elements(By.CSS_SELECTOR, "th,td")]
+            if len(cells) >= 4:
+                amount = _parse_int_text(cells[2])
+                mortgage_rows.append(
+                    {
+                        "date": cells[0],
+                        "status": cells[1],
+                        "amount": amount,
+                        "loan_type": cells[3],
+                    }
+                )
+    except Exception:
+        print("Mortgage data not found")
+
+    return [
+        prop,
+        market,
+        address,
+        city,
+        state,
+        zip_code,
+        price,
+        features_list,
+        bd_bth_sqft_data.get("Beds", ""),
+        bd_bth_sqft_data.get("Baths", ""),
+        _parse_int_text(bd_bth_sqft_data.get("Sq Ft", "")),
+        prop_desc,
+        session_id,
+        mortgage_rows,
+        _extract_listing_id(prop),
+    ]
+
+
+def get_property_details_in_new_tabs(property_urls, market=""):
+    listing_data = []
+
+    driver = open_chrome_driver()
+    session_id = driver.session_id
+
+    try:
+        anchor_handle = driver.current_window_handle
+        for index, prop in enumerate(property_urls, start=1):
+            try:
+                print(f"Opening property tab {index}/{len(property_urls)}: {prop}")
+                _sleep_jitter(6, 10)
+                _open_temporary_tab(driver, prop)
+                _raise_if_blocked(driver, prop)
+
+                listing_data.append(
+                    _extract_property_detail_row(driver, prop, market, session_id)
+                )
+                _sleep_jitter(3, 6)
+
+            except Exception as exc:
+                print(f"Error processing {prop}: {exc}")
+                continue
+
+            finally:
+                _close_current_tab_and_return(driver, anchor_handle)
+                _sleep_jitter(4, 8)
+
+    finally:
+        _close_driver(driver)
+
+    return listing_data
+
+
+def scrape_details_from_current_page_in_one_session(follow_pagination=False, market=""):
+    listing_data = []
+
+    driver = open_chrome_driver()
+    session_id = driver.session_id
+
+    try:
+        anchor_handle = driver.current_window_handle
+        property_urls = _collect_property_urls_from_attached_page(
+            driver, follow_pagination=follow_pagination
+        )
+        print(f"Collected {len(property_urls)} unique property URLs.")
+
+        for index, prop in enumerate(property_urls, start=1):
+            try:
+                print(f"Opening property tab {index}/{len(property_urls)}: {prop}")
+                _sleep_jitter(6, 10)
+                _open_temporary_tab(driver, prop)
+                _raise_if_blocked(driver, prop)
+                listing_data.append(
+                    _extract_property_detail_row(driver, prop, market, session_id)
+                )
+                _sleep_jitter(3, 6)
+
+            except Exception as exc:
+                print(f"Error processing {prop}: {exc}")
+                continue
+
+            finally:
+                _close_current_tab_and_return(driver, anchor_handle)
+                _sleep_jitter(4, 8)
+
+        driver.switch_to.window(anchor_handle)
+        return property_urls, listing_data
+
+    finally:
+        _close_driver(driver)
+
+
 def get_property_details(property_urls, market=""):
     listing_data = []
 
@@ -403,128 +676,10 @@ def get_property_details(property_urls, market=""):
             try:
                 print(f"Navigating to: {prop}")
                 driver.get(prop)
-
-                wait = WebDriverWait(driver, 15)
-                wait.until(
-                    EC.presence_of_element_located(
-                        (By.CLASS_NAME, "property-info-price")
-                    )
-                )
-                _sleep_jitter(5, 8)
-
-                # Extract data you need (example: title, price, etc.)
-                raw_price = driver.find_element(
-                    By.CLASS_NAME, "property-info-price"
-                ).text
-                price = _parse_int_text(raw_price)
-
-                st_num = driver.find_element(
-                    By.CLASS_NAME, "property-info-address-main"
-                ).text
-                city_state_zip = driver.find_element(
-                    By.CLASS_NAME, "property-info-address-citystatezip"
-                ).text
-                _sleep_jitter()
-                city, state, zip_code = _parse_city_state_zip(city_state_zip)
-                address = st_num.strip()
-
-                features = driver.find_elements(By.CLASS_NAME, "highlight-value")
-                features_list = [feat.text for feat in features]
-
-                bd_bth_sqft_feat = driver.find_elements(
-                    By.CLASS_NAME, "property-info-feature"
-                )
-
-                bd_bth_sqft_data = {}
-
-                for feature in bd_bth_sqft_feat:
-                    try:
-                        key_elem = feature.find_element(By.XPATH, "./span[2]")
-                        value_elem = feature.find_element(
-                            By.CLASS_NAME, "property-info-feature-detail"
-                        )
-
-                        key = key_elem.text.strip()
-                        value = value_elem.text.strip()
-
-                        bd_bth_sqft_data[key] = value  # Store in dictionary
-
-                    except Exception:
-                        continue  # Skip if elements are missing
-
-                _sleep_jitter()
-                prop_desc = driver.find_element(
-                    By.CLASS_NAME, "ldp-description-text"
-                ).text
-
-                mortgage_rows = []
-                try:
-                    heading = wait.until(
-                        EC.presence_of_element_located(
-                            (
-                                By.XPATH,
-                                "//h2[normalize-space()='Mortgage History' or "
-                                "normalize-space()='Mortgage history']",
-                            )
-                        )
-                    )
-                    driver.execute_script(
-                        "arguments[0].scrollIntoView({block:'center'});", heading
-                    )
-                    _sleep_jitter(2, 4)
-                    driver.execute_script(
-                        "arguments[0].scrollIntoView({block:'center'});", heading
-                    )
-                    driver.execute_script("window.scrollBy(0, 200);")
-                    _sleep_jitter(1.5, 3)
-
-                    table = wait.until(
-                        EC.presence_of_element_located(
-                            (
-                                By.XPATH,
-                                "(//h2[normalize-space()='Mortgage History' or "
-                                "normalize-space()='Mortgage history']/following::table)[1]",
-                            )
-                        )
-                    )
-
-                    rows = table.find_elements(By.CSS_SELECTOR, "tbody tr")
-                    for row in rows:
-                        cells = [
-                            c.text.strip()
-                            for c in row.find_elements(By.CSS_SELECTOR, "th,td")
-                        ]
-                        if len(cells) >= 4:
-                            amount = _parse_int_text(cells[2])
-                            mortgage_rows.append(
-                                {
-                                    "date": cells[0],
-                                    "status": cells[1],
-                                    "amount": amount,
-                                    "loan_type": cells[3],
-                                }
-                            )
-                except Exception:
-                    print("Mortgage data not found")
+                _raise_if_blocked(driver, prop)
 
                 listing_data.append(
-                    [
-                        prop,
-                        market,
-                        address,
-                        city,
-                        state,
-                        zip_code,
-                        price,
-                        features_list,
-                        bd_bth_sqft_data.get("Beds", ""),
-                        bd_bth_sqft_data.get("Baths", ""),
-                        _parse_int_text(bd_bth_sqft_data.get("Sq Ft", "")),
-                        prop_desc,
-                        session_id,
-                        mortgage_rows,
-                        _extract_listing_id(prop),
-                    ]
+                    _extract_property_detail_row(driver, prop, market, session_id)
                 )
                 _sleep_jitter(3, 6)
 
@@ -533,6 +688,6 @@ def get_property_details(property_urls, market=""):
                 continue
 
     finally:
-        driver.quit()
+        _close_driver(driver)
 
     return listing_data
