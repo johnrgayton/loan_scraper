@@ -1,6 +1,8 @@
 import os
 import random
 import re
+import shutil
+import subprocess
 import time
 
 import undetected_chromedriver as uc
@@ -11,6 +13,13 @@ from selenium.webdriver.support.ui import WebDriverWait
 
 SLEEP_MIN_SECONDS = float(os.getenv("SCRAPER_SLEEP_MIN", "1.5"))
 SLEEP_MAX_SECONDS = float(os.getenv("SCRAPER_SLEEP_MAX", "3.5"))
+DEFAULT_CHROME_CANDIDATES = (
+    "google-chrome",
+    "google-chrome-stable",
+    "chromium",
+    "chromium-browser",
+    "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome",
+)
 
 
 def _sleep_jitter(min_seconds=SLEEP_MIN_SECONDS, max_seconds=SLEEP_MAX_SECONDS):
@@ -19,15 +28,107 @@ def _sleep_jitter(min_seconds=SLEEP_MIN_SECONDS, max_seconds=SLEEP_MAX_SECONDS):
     time.sleep(random.uniform(min_seconds, max_seconds))
 
 
+def _major_version_from_text(value):
+    if not value:
+        return None
+    match = re.search(r"\b(\d+)\.\d+\.\d+\.\d+\b", value)
+    if match:
+        return int(match.group(1))
+    match = re.search(r"\b(\d{2,})\b", value)
+    return int(match.group(1)) if match else None
+
+
+def _run_version_command(executable):
+    try:
+        result = subprocess.run(
+            [executable, "--version"],
+            check=False,
+            capture_output=True,
+            text=True,
+            timeout=5,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return None
+    return " ".join(part for part in (result.stdout, result.stderr) if part).strip()
+
+
+def _resolve_executable(candidates):
+    for candidate in candidates:
+        if not candidate:
+            continue
+        if os.path.exists(candidate):
+            return candidate
+        resolved = shutil.which(candidate)
+        if resolved:
+            return resolved
+    return None
+
+
+def _detect_executable_major(candidates):
+    executable = _resolve_executable(candidates)
+    if not executable:
+        return None, None
+    version_text = _run_version_command(executable)
+    return executable, _major_version_from_text(version_text)
+
+
+def _configured_chrome_version_main():
+    raw_version = os.getenv("CHROME_VERSION_MAIN", "").strip()
+    if not raw_version:
+        return None
+    try:
+        return int(raw_version)
+    except ValueError as exc:
+        raise ValueError("CHROME_VERSION_MAIN must be an integer Chrome major version.") from exc
+
+
+def _validate_browser_driver_versions():
+    """Fail before Selenium starts when browser/driver versions are clearly incompatible."""
+    expected_major = _configured_chrome_version_main()
+    chrome_binary = os.getenv("CHROME_BINARY_PATH")
+    chrome_candidates = (chrome_binary, *DEFAULT_CHROME_CANDIDATES)
+    chrome_path, chrome_major = _detect_executable_major(chrome_candidates)
+    driver_path, driver_major = _detect_executable_major(("chromedriver",))
+
+    if expected_major and chrome_major and chrome_major != expected_major:
+        raise RuntimeError(
+            f"CHROME_VERSION_MAIN={expected_major} does not match Chrome "
+            f"{chrome_major} at {chrome_path}."
+        )
+
+    if chrome_major and driver_major and chrome_major != driver_major:
+        raise RuntimeError(
+            f"Chrome major version {chrome_major} at {chrome_path} does not match "
+            f"ChromeDriver major version {driver_major} at {driver_path}. "
+            "Rebuild the Docker image or set CHROME_VERSION_MAIN to the installed "
+            "Chrome major so undetected-chromedriver can fetch a compatible driver."
+        )
+
+
+def _is_headless_enabled():
+    return os.getenv("SCRAPER_HEADLESS", "").strip().lower() in ("1", "true", "yes", "y")
+
+
 def open_chrome_driver(proxy_url=None):
+    _validate_browser_driver_versions()
+
     options = uc.ChromeOptions()
-    options.add_argument("--start-maximized")
+    chrome_binary = os.getenv("CHROME_BINARY_PATH")
+    if chrome_binary:
+        options.binary_location = chrome_binary
+    if _is_headless_enabled():
+        options.add_argument("--headless=new")
+        options.add_argument("--window-size=1920,1080")
+    else:
+        options.add_argument("--start-maximized")
     # Add more options to simulate human behavior
     options.add_argument("--disable-blink-features=AutomationControlled")
+    options.add_argument("--no-sandbox")
+    options.add_argument("--disable-dev-shm-usage")
     proxy = proxy_url or os.getenv("SCRAPER_PROXY_URL")
     if proxy:
         options.add_argument(f"--proxy-server={proxy}")
-    return uc.Chrome(options=options)
+    return uc.Chrome(options=options, version_main=_configured_chrome_version_main())
 
 
 def _parse_int_text(value):

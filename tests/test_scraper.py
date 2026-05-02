@@ -2,7 +2,12 @@ import os
 
 import pytest
 
-from loan_scraper.scraper import _extract_listing_id, _parse_int_text, get_property_details
+from loan_scraper.scraper import (
+    _extract_listing_id,
+    _major_version_from_text,
+    _parse_int_text,
+    get_property_details,
+)
 from loan_scraper.output import write_listing_data
 
 
@@ -16,6 +21,12 @@ def test_parse_int_text():
 def test_extract_listing_id():
     url = "https://www.homes.com/property/100-abaco-dr-e-cedar-point-nc/w3p44ve2xfvs9/"
     assert _extract_listing_id(url) == "w3p44ve2xfvs9"
+
+
+def test_major_version_from_text():
+    assert _major_version_from_text("Google Chrome 147.0.7727.138") == 147
+    assert _major_version_from_text("ChromeDriver 148.0.0") == 148
+    assert _major_version_from_text("") is None
 
 
 @pytest.mark.skipif(

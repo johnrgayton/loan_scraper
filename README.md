@@ -37,6 +37,39 @@ The scraper uses Selenium (undetected-chromedriver) to load listing pages and
 extract data from stable page elements. Mortgage history is pulled directly
 from the table under the "Mortgage History" heading (no click-through).
 
+## Browser and driver compatibility
+
+Chrome and ChromeDriver must use the same major version. For example, Chrome
+147 needs ChromeDriver 147. If they drift apart, Selenium fails before any page
+loads.
+
+This project handles that in two places:
+
+- At runtime, the scraper checks the installed Chrome and ChromeDriver versions
+  when they are discoverable. If they are incompatible, it raises a clear error
+  before starting the scrape.
+- In Docker, the image installs a pinned Chrome for Testing build and the
+  matching pinned ChromeDriver build.
+
+The current Docker pin is:
+
+```
+CHROME_VERSION=147.0.7727.138
+CHROME_VERSION_MAIN=147
+```
+
+For local non-Docker runs, set `CHROME_VERSION_MAIN` to your installed Chrome
+major version so undetected-chromedriver can request a compatible driver:
+
+```
+export CHROME_VERSION_MAIN=147
+```
+
+If you want to intentionally update Chrome later, update both
+`CHROME_VERSION` and `CHROME_VERSION_MAIN` in `docker-compose.yml`, then rebuild
+the image. Keeping updates at build time makes scrape runs reproducible and
+avoids mutating the browser installation while the scraper is running.
+
 ## Waits and sleeps (anti-flake + anti-bot)
 
 Homes.com pages load content dynamically as you scroll. The scraper uses:
@@ -82,6 +115,12 @@ CREATE TABLE IF NOT EXISTS home_loans.f_scraped_data (
 
 ## Running the scraper
 
+Install pinned Python dependencies for local runs:
+
+```
+python3 -m pip install -r requirements.txt
+```
+
 Set your Postgres env vars:
 
 ```
@@ -89,6 +128,7 @@ export PGHOST=localhost
 export PGPORT=5432
 export PGDATABASE=postgres
 export PGUSER=postgres
+export CHROME_VERSION_MAIN=147
 ```
 
 If you use .pgpass for the password (recommended), add:
@@ -123,7 +163,53 @@ PYTHONPATH=src python3 -m loan_scraper \
 
 To omit any filter, set it to `any` (for example, `--sfmin any` or
 `--bath-max any`). This removes it from the URL.
+
+## Running with Docker
+
+Docker Compose starts Postgres and can run the scraper with a pinned
+Chrome/ChromeDriver pair.
+
+Start Postgres:
+
 ```
+docker compose up -d postgres
+```
+
+The container exposes Postgres on host port `5433` to avoid conflicting with a
+local Postgres already using `5432`. Inside Docker Compose, the scraper still
+connects to `postgres:5432`.
+
+Run the scraper:
+
+```
+docker compose run --rm scraper --market venice-fl
+```
+
+Run with filters:
+
+```
+docker compose run --rm scraper \
+  --market venice-fl \
+  --bed-min 4 \
+  --bed-max 5 \
+  --sfmin 1500 \
+  --bath-min 2 \
+  --bath-max 5 \
+  --parking 2 \
+  --price-max 600000 \
+  --exclude-active-adult true \
+  --require-garage true
+```
+
+Rebuild after changing the pinned Chrome version:
+
+```
+docker compose build --pull scraper
+```
+
+The Postgres container creates the `home_loans` schema and
+`home_loans.f_scraped_data` table from `docker/postgres/init.sql` when the
+database volume is first initialized.
 
 ## Tests
 
