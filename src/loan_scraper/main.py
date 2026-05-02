@@ -23,15 +23,19 @@ def _include_flag(value):
 
 
 def build_filters(args):
-    property_type = _param_or_none(args.property_type) or "houses-for-sale"
-    listing_type = _param_or_none(args.listing_type) or "resale"
+    property_type = _param_or_none(args.property_type)
+    listing_type = _param_or_none(args.listing_type)
 
     bed_min = _param_or_none(args.bed_min)
     bed_max = _param_or_none(args.bed_max)
 
-    path = f"{property_type}/{listing_type}/"
-    if bed_min and bed_max:
-        path += f"{bed_min}-to-{bed_max}-bedroom/"
+    path_parts = []
+    if property_type:
+        path_parts.append(property_type)
+    if property_type and listing_type:
+        path_parts.append(listing_type)
+    if property_type and bed_min and bed_max:
+        path_parts.append(f"{bed_min}-to-{bed_max}-bedroom")
 
     params = {}
     if _param_or_none(args.sfmin):
@@ -54,7 +58,12 @@ def build_filters(args):
         params["am"] = ",".join(am_values)
 
     query = urlencode(params)
-    return f"{path}?{query}" if query else path
+    path = "/".join(path_parts)
+    if path:
+        path = f"{path}/"
+    if query:
+        return f"{path}?{query}"
+    return path
 
 
 def build_parser():

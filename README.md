@@ -84,6 +84,50 @@ You can tune sleep timing using environment variables:
 - SCRAPER_SLEEP_MIN (default: 1.5 seconds)
 - SCRAPER_SLEEP_MAX (default: 3.5 seconds)
 
+## Debugging blocked pages
+
+If Homes.com or an edge provider blocks the request, the scraper now raises a
+clear `ScraperBlockedError` instead of waiting until Selenium times out on a
+missing listing selector.
+
+Enable debug artifacts when investigating failures:
+
+```
+SCRAPER_DEBUG=1 docker compose run --rm scraper --market chesterfield-mo --price-max 700000
+```
+
+Debug mode writes the page HTML, body text, and a screenshot to `./debug` when
+running through Docker Compose. For local runs, override the destination with
+`SCRAPER_DEBUG_DIR`.
+
+## Dedicated Chrome profile
+
+The scraper can use a dedicated Chrome profile without touching your personal
+browser profile. This lets cookies and other browser state persist across runs
+while keeping the profile out of git.
+
+Local visible run with a dedicated profile:
+
+```
+CHROME_USER_DATA_DIR="$PWD/chrome-profile/local" \
+SCRAPER_HEADLESS=0 \
+CHROME_VERSION_MAIN=147 \
+PYTHONPATH=src python3 -m loan_scraper \
+  --market chesterfield-mo \
+  --price-max 700000
+```
+
+Docker Compose uses a separate profile mounted at `./chrome-profile/docker`.
+That profile is Linux Chrome state, so keep it separate from the local macOS
+profile:
+
+```
+docker compose run --rm scraper --market chesterfield-mo --price-max 700000
+```
+
+If you need a named Chrome profile within the user-data directory, set
+`CHROME_PROFILE_DIRECTORY`, for example `Default` or `Profile 1`.
+
 ## Postgres output
 
 The scraper inserts directly into Postgres using psycopg2 and JSONB fields for
@@ -144,12 +188,22 @@ PGHOST=localhost PGPORT=5432 PGDATABASE=postgres PGUSER=postgres \
 PYTHONPATH=src python3 -m loan_scraper --market venice-fl
 ```
 
-Full example with filters:
+Filters are opt-in. With no filter flags, the scraper visits the market URL
+without inherited defaults. For example, `--market chesterfield-mo --price-max
+700000` builds:
+
+```
+https://www.homes.com/chesterfield-mo/?price-max=700000
+```
+
+Full example with path and query filters:
 
 ```
 PGHOST=localhost PGPORT=5432 PGDATABASE=postgres PGUSER=postgres \
 PYTHONPATH=src python3 -m loan_scraper \
   --market venice-fl \
+  --property-type houses-for-sale \
+  --listing-type resale \
   --bed-min 4 \
   --bed-max 5 \
   --sfmin 1500 \
@@ -163,6 +217,15 @@ PYTHONPATH=src python3 -m loan_scraper \
 
 To omit any filter, set it to `any` (for example, `--sfmin any` or
 `--bath-max any`). This removes it from the URL.
+
+To load the site more like a normal browsing session, enable staged navigation.
+This visits the homepage, then the market URL, then the final filtered URL:
+
+```
+SCRAPER_STAGED_NAVIGATION=1 PYTHONPATH=src python3 -m loan_scraper \
+  --market chesterfield-mo \
+  --price-max 700000
+```
 
 ## Running with Docker
 
@@ -190,6 +253,8 @@ Run with filters:
 ```
 docker compose run --rm scraper \
   --market venice-fl \
+  --property-type houses-for-sale \
+  --listing-type resale \
   --bed-min 4 \
   --bed-max 5 \
   --sfmin 1500 \
@@ -199,6 +264,14 @@ docker compose run --rm scraper \
   --price-max 600000 \
   --exclude-active-adult true \
   --require-garage true
+```
+
+Run with staged navigation:
+
+```
+docker compose run --rm -e SCRAPER_STAGED_NAVIGATION=1 scraper \
+  --market chesterfield-mo \
+  --price-max 700000
 ```
 
 Rebuild after changing the pinned Chrome version:

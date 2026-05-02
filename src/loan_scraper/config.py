@@ -1,18 +1,19 @@
 from dataclasses import dataclass
+from typing import Optional
 
 
 @dataclass(frozen=True)
 class ScrapeConfig:
     base_url: str = "https://www.homes.com"
     market: str = "venice-fl"
-    property_type: str = "houses-for-sale"
-    listing_type: str = "resale"
-    bed_min: str = "4"
-    bed_max: str = "5"
-    sfmin: str = "1500"
-    bath_min: str = "2"
-    bath_max: str = "5"
-    parking: str = "2"
-    price_max: str = "600000"
-    exclude_active_adult: str = "true"
-    require_garage: str = "true"
+    property_type: Optional[str] = None
+    listing_type: Optional[str] = None
+    bed_min: Optional[str] = None
+    bed_max: Optional[str] = None
+    sfmin: Optional[str] = None
+    bath_min: Optional[str] = None
+    bath_max: Optional[str] = None
+    parking: Optional[str] = None
+    price_max: Optional[str] = None
+    exclude_active_adult: Optional[str] = None
+    require_garage: Optional[str] = None

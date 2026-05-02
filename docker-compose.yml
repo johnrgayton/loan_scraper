@@ -32,7 +32,11 @@ services:
       PGSSLMODE: disable
       CHROME_BINARY_PATH: /opt/chrome/chrome-linux64/chrome
       CHROME_VERSION_MAIN: 147
+      CHROME_USER_DATA_DIR: /app/chrome-profile
       SCRAPER_HEADLESS: 1
+    volumes:
+      - ./debug:/tmp/loan_scraper_debug
+      - ./chrome-profile/docker:/app/chrome-profile
     depends_on:
       postgres:
         condition: service_healthy

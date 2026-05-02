@@ -4,6 +4,9 @@ import re
 import shutil
 import subprocess
 import time
+from datetime import datetime
+from pathlib import Path
+from urllib.parse import urlparse
 
 import undetected_chromedriver as uc
 from selenium.webdriver.common.by import By
@@ -13,6 +16,7 @@ from selenium.webdriver.support.ui import WebDriverWait
 
 SLEEP_MIN_SECONDS = float(os.getenv("SCRAPER_SLEEP_MIN", "1.5"))
 SLEEP_MAX_SECONDS = float(os.getenv("SCRAPER_SLEEP_MAX", "3.5"))
+SCRAPER_DEBUG_DIR = os.getenv("SCRAPER_DEBUG_DIR", "/tmp/loan_scraper_debug")
 DEFAULT_CHROME_CANDIDATES = (
     "google-chrome",
     "google-chrome-stable",
@@ -20,6 +24,18 @@ DEFAULT_CHROME_CANDIDATES = (
     "chromium-browser",
     "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome",
 )
+BLOCKED_PAGE_MARKERS = (
+    "access denied",
+    "you don't have permission to access",
+    "unusual traffic",
+    "verify you are human",
+    "captcha",
+    "just a moment",
+)
+
+
+class ScraperBlockedError(RuntimeError):
+    pass
 
 
 def _sleep_jitter(min_seconds=SLEEP_MIN_SECONDS, max_seconds=SLEEP_MAX_SECONDS):
@@ -109,6 +125,161 @@ def _is_headless_enabled():
     return os.getenv("SCRAPER_HEADLESS", "").strip().lower() in ("1", "true", "yes", "y")
 
 
+def _chrome_user_data_dir():
+    return os.getenv("CHROME_USER_DATA_DIR", "").strip()
+
+
+def _chrome_profile_directory():
+    return os.getenv("CHROME_PROFILE_DIRECTORY", "").strip()
+
+
+def _is_debug_enabled():
+    return os.getenv("SCRAPER_DEBUG", "").strip().lower() in ("1", "true", "yes", "y")
+
+
+def _is_staged_navigation_enabled():
+    return os.getenv("SCRAPER_STAGED_NAVIGATION", "").strip().lower() in (
+        "1",
+        "true",
+        "yes",
+        "y",
+    )
+
+
+def _market_url(base_url, market):
+    return f"{base_url.rstrip('/')}/{market.strip('/')}/"
+
+
+def _search_url(base_url, market, filters):
+    return f"{_market_url(base_url, market)}{filters.lstrip('/')}"
+
+
+def _safe_debug_name(url, label):
+    parsed = urlparse(url)
+    raw_path = f"{parsed.netloc}{parsed.path}".strip("/") or "page"
+    safe_path = re.sub(r"[^a-zA-Z0-9._-]+", "_", raw_path).strip("_")
+    timestamp = datetime.utcnow().strftime("%Y%m%dT%H%M%SZ")
+    return f"{timestamp}_{label}_{safe_path[:120]}"
+
+
+def _write_debug_artifacts(driver, url, label):
+    """Capture enough state to diagnose bot blocks or selector drift after a failed load."""
+    if not _is_debug_enabled():
+        return None
+
+    debug_dir = Path(SCRAPER_DEBUG_DIR)
+    debug_dir.mkdir(parents=True, exist_ok=True)
+    base_path = debug_dir / _safe_debug_name(url, label)
+    body_text = ""
+    try:
+        body_text = driver.find_element(By.TAG_NAME, "body").text
+    except Exception:
+        pass
+
+    html_path = base_path.with_suffix(".html")
+    text_path = base_path.with_suffix(".txt")
+    screenshot_path = base_path.with_suffix(".png")
+
+    html_path.write_text(driver.page_source, encoding="utf-8")
+    text_path.write_text(
+        "\n".join(
+            [
+                f"url={url}",
+                f"current_url={driver.current_url}",
+                f"title={driver.title}",
+                "",
+                body_text,
+            ]
+        ),
+        encoding="utf-8",
+    )
+    try:
+        driver.save_screenshot(str(screenshot_path))
+    except Exception:
+        screenshot_path = None
+
+    paths = [str(html_path), str(text_path)]
+    if screenshot_path:
+        paths.append(str(screenshot_path))
+    return paths
+
+
+def _get_body_text(driver):
+    try:
+        return driver.find_element(By.TAG_NAME, "body").text
+    except Exception:
+        return ""
+
+
+def _detect_blocked_page(driver):
+    title = (driver.title or "").lower()
+    body_text = _get_body_text(driver)
+    body_lower = body_text.lower()
+    source_lower = (driver.page_source or "").lower()
+    for marker in BLOCKED_PAGE_MARKERS:
+        if marker in title or marker in body_lower or marker in source_lower:
+            return marker, body_text[:500]
+    return None, ""
+
+
+def _raise_if_blocked(driver, url):
+    marker, body_sample = _detect_blocked_page(driver)
+    if not marker:
+        return
+
+    debug_paths = _write_debug_artifacts(driver, url, "blocked")
+    details = [
+        f"Scraper appears blocked while loading {url}.",
+        f"Detected marker: {marker!r}.",
+    ]
+    if body_sample:
+        details.append(f"Page text sample: {body_sample!r}.")
+    if debug_paths:
+        details.append(f"Debug artifacts: {', '.join(debug_paths)}.")
+    raise ScraperBlockedError(" ".join(details))
+
+
+def _wait_for_listing_cards(driver, url):
+    try:
+        WebDriverWait(driver, 15).until(
+            EC.presence_of_element_located((By.CLASS_NAME, "placard-container"))
+        )
+    except Exception as exc:
+        _raise_if_blocked(driver, url)
+        debug_paths = _write_debug_artifacts(driver, url, "missing_placards")
+        message = (
+            f"Timed out waiting for listing cards on {url}. "
+            "The site markup may have changed, the page may still be loading, "
+            "or the request may have been blocked without a known marker."
+        )
+        if debug_paths:
+            message += f" Debug artifacts: {', '.join(debug_paths)}."
+        raise RuntimeError(message) from exc
+
+
+def _load_search_page(driver, base_url, market, filters):
+    final_url = _search_url(base_url, market, filters)
+    print(f"Loading search URL: {final_url}")
+
+    if not _is_staged_navigation_enabled():
+        driver.get(final_url)
+        _raise_if_blocked(driver, final_url)
+        return final_url
+
+    # Staged navigation gives the browser a more normal sequence before filters apply.
+    staged_urls = [base_url.rstrip("/") + "/", _market_url(base_url, market)]
+    if final_url != staged_urls[-1]:
+        staged_urls.append(final_url)
+
+    for staged_url in staged_urls:
+        print(f"Navigating staged URL: {staged_url}")
+        driver.get(staged_url)
+        _raise_if_blocked(driver, staged_url)
+        _sleep_jitter(2, 4)
+
+    return final_url
+
+
 def open_chrome_driver(proxy_url=None):
     _validate_browser_driver_versions()
 
@@ -116,6 +287,13 @@ def open_chrome_driver(proxy_url=None):
     chrome_binary = os.getenv("CHROME_BINARY_PATH")
     if chrome_binary:
         options.binary_location = chrome_binary
+    user_data_dir = _chrome_user_data_dir()
+    if user_data_dir:
+        Path(user_data_dir).mkdir(parents=True, exist_ok=True)
+        options.add_argument(f"--user-data-dir={user_data_dir}")
+    profile_directory = _chrome_profile_directory()
+    if profile_directory:
+        options.add_argument(f"--profile-directory={profile_directory}")
     if _is_headless_enabled():
         options.add_argument("--headless=new")
         options.add_argument("--window-size=1920,1080")
@@ -156,13 +334,10 @@ def _extract_listing_id(url):
 
 
 def get_property_urls(base_url, market="", filters=""):
-    url = f"{base_url}/{market}/{filters}"
-
     driver = open_chrome_driver()
-    driver.get(url)
+    url = _load_search_page(driver, base_url, market, filters)
 
-    wait = WebDriverWait(driver, 15)
-    wait.until(EC.presence_of_element_located((By.CLASS_NAME, "placard-container")))
+    _wait_for_listing_cards(driver, url)
     _sleep_jitter(4, 7)
 
     property_urls = []
